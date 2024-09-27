@@ -1,0 +1,161 @@
+''''''''''''''''''''''''''''''''''
+
+' CR1000 Datalogger CRBasic Sample Program for Reading beadedstream Devices
+
+' TODO: Check the modbus address change functionality. Add in SDI12 code. Add in multiple modbus code. Test if subfuction works (use logic analyzer)
+
+''''''''''''''''''''''''''''''''''
+
+' Special Wiring: 
+    ' CR6 C1 —> Recite RS485 B
+    ' CR6 C2 —> Recite RS485 A
+
+    ' For the CR1000X
+    ' CR1000X C7 —> Recite RS485 B
+    ' CR1000X C8 —> Recite RS485 A
+
+    ' For the CR1000 with MD485 (The labeling is swapped)
+    ' MD485 A- —> Recite RS485 B 
+    ' MD485 B+ —> Recite RS485 A
+
+' Campbell Scientific Defaults
+Public PTemp, batt_volt
+
+' Sensor Specific Variables
+Const total_devices = 5         ' This value is a required input. Input number of Recites/MLinks. You will need to specify the amount of sensors for each string
+Const max_sensors = 125         ' 125 is the maximum number of sensors on a string
+
+' Delete unused sensor_counts and add more sensor counts as more devices are added
+Const device_1_sensor_count = 20    ' 20 sensors can be recorded every 1 minute.  If this number is larger than the actual device, then 99s will be placed in the datatable for all additional sensors
+Const device_2_sensor_count = 4
+Const device_3_sensor_count = 5
+Const device_4_sensor_count = 6
+Const device_5_sensor_count = 2
+
+' Intermediate Variables
+Dim dtc_temps(total_devices, max_sensors)
+Public result_code 
+Public result_code_1
+Public ResultCode2
+Public ResultCode3
+Public ResultCode4
+Public ResultCode5
+Public dtc_temps1(device_1_sensor_count)
+Public dtc_temps2(device_2_sensor_count)
+Public dtc_temps3(device_3_sensor_count)
+Public dtc_temps4(device_4_sensor_count)
+Public dtc_temps5(device_5_sensor_count)
+Dim loopincrementer, i, j  
+Public modbus_temps1(device_1_sensor_count) As Long
+Public modbus_temps2(device_2_sensor_count) As Long
+Public modbus_temps3(device_3_sensor_count) As Long
+Public modbus_temps4(device_4_sensor_count) As Long
+Public modbus_temps5(device_5_sensor_count) As Long 
+
+' Variables to Set up Serial Configuration
+Const modbus_buffer = 128               ' Serial buffer size 
+Const modbus_port = ComSDC7             ' Datalogger control terminals. This port can be configured to ComSDC7 for an MD485 connected via the CS I/O port
+Public modbus_baud = 115200   		    ' Communication Speed (1200, 2400, 4800, 9600, 19200, 38400, 57600, and 115200) bits per second, 9600 is default
+Public modbus_variable_address_1 = 1  	' Address of Recite / MLink: 1 to 255
+Const modbus_function_temps = 4  		' Value 4 == Read Input Registers of modbus device
+Const modbus_start = 2      		    ' Value 2 == Input Regstier Number 30002, value 1 of DTC String
+Const modbus_option = 1    			    ' Value 1 == Modbus 16 bit signed integer ' Value 11 == Modbus 2byte ASCII output                  
+Const modbus_retries = 1                ' Number of retries (should be 1 or greater)
+Const modbus_timeout = 500              ' Timeout example: 1000*0.01 sec = 10 sec
+
+' Modbus Additional Function Variables
+Public change_address As Boolean = False
+Public change_baud As Boolean = False
+Public reset_device As Boolean = False
+Const current_device_address
+Const current_baud
+Const modbus_function_write_register = 6    ' Used for changing device address, baud, protocol, and temperature update interval
+Public modbus_variable_change_address = 0   ' Configure to change to a new address
+Public modbus_variable_change_baud = 1      ' Configure to change to a new baud
+Const modbus_write_start = 1
+Const modbus_write_length = 1
+Const modbus_function_diagnostics = 8       ' Used in resetting the device
+Const modbus_function_read_register = 3     ' Confirm the new settings
+
+
+' Logging Interval Configuration
+Const logging_interval = 30         ' Set this value to the desired logging interval (e.g. 30 for 30 minutes) NOTE: The Recite/Mlinks are configured to update their temperatures every 60 seconds.
+Const logging_unit = Sec            ' Set this to 'Sec' for seconds, 'Min' for minutes, 'Hr' for hours
+
+' Define Data Tables. Delete any that are unused.
+DataTable (Diagnostic,1,-1)
+	DataInterval (0,1,Hr,0)
+	Minimum (1,batt_volt,IEEE4,False,False)
+	Sample (1,PTemp,IEEE4)
+EndTable
+
+DataTable (StringTemps1,1,-1) 
+	DataInterval (0,logging_interval,logging_unit,0)
+	Sample(device_1_sensor_count,dtc_temps1(),IEEE4)
+EndTable
+
+DataTable (StringTemps2, 1, -1)
+    DataInterval (0, logging_interval, logging_unit, 0)
+    Sample (device_2_sensor_count, dtc_temps2(), IEEE4)
+EndTable
+
+DataTable (StringTemps3, 1, -1)
+    DataInterval (0, logging_interval, logging_unit, 0)
+    Sample (device_3_sensor_count, dtc_temps3(), IEEE4)
+EndTable
+
+DataTable (StringTemps4, 1, -1)
+    DataInterval (0, logging_interval, logging_unit, 0)
+    Sample (device_4_sensor_count, dtc_temps4(), IEEE4)
+EndTable
+
+DataTable (StringTemps5, 1, -1)
+    DataInterval (0, logging_interval, logging_unit, 0)
+    Sample (device_5_sensor_count, dtc_temps5(), IEEE4)
+EndTable
+
+
+' Main Program
+BeginProg
+    ' SerialOpen (modbus_port,modbus_baud,0,0,modbus_buffer,modbus_function) 'This portion is used when no MD485 is present
+    ' Delay (1,10,2) ' (Option,Delay,Units) This allows for the devices to power up if they are being shut down between reads.
+
+	Scan (15,Sec,1,0)
+		' SerialFlush(modbus_port)
+
+		' Get system status
+		PanelTemp (PTemp,60)
+		Battery (batt_volt)
+        
+        ' Trigger any changes using the Public variables
+        If change_address = True Then
+            ' SerialOpen (modbus_port,9600,0,0,50,4)
+            ModbusMaster (result_code,modbus_port,modbus_baud,modbus_variable_address_1,modbus_function_write_register,modbus_variable_change_address,modbus_write_start,modbus_write_length,modbus_retries,modbus_timeout,modbus_option)
+            ModbusMaster (result_code,modbus_port,modbus_baud,modbus_variable_address_1,modbus_function_diagnostics,modbus_variable_change_address,modbus_write_start,modbus_write_length,modbus_retries,modbus_timeout,modbus_option)
+            
+            ' SerialClose (modbus_port)
+            change_address = False
+        EndIf
+
+        ' Execute Modbus communication for each device and handle the results
+        ' https://help.campbellsci.com/crbasic/cr1000x/Content/Instructions/modbusclient.htm
+
+        ' Device 1
+        ' Change baud
+        ' ModbusMaster(result_code_1, modbus_port, modbus_baud, modbus_variable_address, 6, modbus_variable_baud, modbus_start, 1, modbus_retries, modbus_timeout, 0) This is for changing the Modbus address of the Recite / MLink. Device needs to be powercycled to take affect.
+
+        ModbusMaster(result_code_1, modbus_port, modbus_baud, modbus_variable_address_1, modbus_function, modbus_temps1(1), modbus_start, device_1_sensor_count, modbus_retries, modbus_timeout, modbus_option)
+        For loopincrementer = 1 To device_1_sensor_count
+            If result_code_1 = 0 Then
+                dtc_temps1(loopincrementer) = modbus_temps1(loopincrementer) / 100
+            Else
+                dtc_temps1(loopincrementer) = NaN
+            EndIf
+        Next loopincrementer
+        CallTable StringTemps1
+        CallTable Diagnostic
+        
+
+       
+	NextScan
+EndProg

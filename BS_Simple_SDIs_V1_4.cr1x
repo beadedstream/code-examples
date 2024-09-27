@@ -1,0 +1,141 @@
+'CR1000X Series Datalogger
+SequentialMode
+
+'==================================================================
+'-----------  BeadedStream SDI-12 Recite Interface  --------------
+'==================================================================
+' Draft V1.4
+' Creation Dates: 2018-04-20
+' Modified Date: 2021-07-22
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'''  FULL SENSOR LIST              ''''''''''''''''''''''''
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+' 1 -- BeadedStream Digital Temperature Cable with 
+'      Recite Interface in SDI-12 Mode
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'''  Important Input / Output and Control Settings   ''''''
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+    ' How often to measure the DTC (Digital Temperature Cable) sensors
+    ' Units are Minutes
+	
+    Const sampling_interval_minutes As Long = 1 
+	
+    ' How often to save an entry to the output data table
+    ' Units are Minutes  	
+    Const output_interval_minutes As Long = 60
+	
+    ' The Control Port to communicate over SDI-12 with (default it 1)
+    Const ControlPort = "C1"
+	
+    ' The SDI-12 Addrees the Recite unit has been assigned (default is 1)
+	' The SDI-12 Address can be found via terminal connection using the command "?!"	
+    Const DTC_SDI_ID = "1"
+    Const total_sensors = 30
+    
+    ' Variables to check that communication has been successful with interface
+    Public error_code 
+    Public final_code
+
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'''' Sensor Wiring and variables ''''''''''''''''''''''''''
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+' BeadedStreams Recite Interface Box
+' Interface Ground Port -- CR1000X Power Ground
+' Interface Power Positive Port-- CR1000X SW12V Switched 12 Volt Port
+' Interface SDI-12 Port -- CR1000X C1
+
+    Public DTC(total_sensors)
+    Units DTC = Degrees Celsius
+    
+''''''''''''''''''''''''''''''''''
+'' Additional Public Variables '''
+'' and Aliases  ''''''''''''''''''
+    ''' Diagnostic Variables
+	
+    Public batt_volt
+    Public Ptemp
+    Units batt_volt = Volts DC
+    Units Ptemp = Degrees Celsius
+    
+'''''''''''''''''''''''''''''''
+'''''''''''''''''''''''''''''''
+'' Define Data Output Tables ''
+'''''''''''''''''''''''''''''''
+'''''''''''''''''''''''''''''''
+    DataTable(DTC,true,-1)
+        DataInterval(0,output_interval_minutes,Min,10)
+        Average(total_sensors,DTC,FP2,False)
+        Minimum (1,batt_volt,FP2,False,False)
+        Minimum (1,Ptemp,FP2,False,False)
+    EndTable
+    DataTable(dtc_test,true,-1)
+        Sample(1,final_code,UINT2)
+        Sample(4,DTC(),fp2)
+    EndTable
+    DataTable(dtc_avg,true,-1)
+        DataInterval(0,60,Min,10)
+        Average(1,final_code,FP2,False)
+        Average(4,DTC(),fp2,False)
+    EndTable
+
+    
+''''''''''''''''''''''''
+'' Program Start   '''''
+''''''''''''''''''''''''
+BeginProg
+
+
+Scan(20,Sec, 10, 0)
+    '' The main program body executes every 20 seconds to allow for other 
+    '' sensors requiring a higher time execution (e.g. air temperature or wind wpeed).
+    '' The DTC cable is measured less often, see 'sampling_interval_minutes' variable
+    '' in the section beginning on line 18 up top.
+
+    '''''''''''''''''''''''''''''''''''''''''
+    '' Typical Diagnostic Measurements  '''''
+	
+    Battery(batt_volt)
+    PanelTemp(Ptemp,_60Hz)
+    If IfTime (0,sampling_interval_minutes,Min)
+        ''''''''''''''''''''''''''''''''''''''''''
+        '' Measure the temperature sensor(s)  ''''
+        ' Turn on switced 12 volts to power sensors
+		SW12 (SW12_1,1 ,0)
+		Delay(0,5,sec) 'the Recite requires this time to boot up before measuring temps
+        error_code = 0
+        Do While error_code < 8
+            SDI12Recorder(DTC(),C1,DTC_SDI_ID,"C!",1,0,-1,1) ' "C!" asks the interface to measure the cable and pass the logger the results.
+            If DTC(1) = NaN Then
+                SDI12Recorder(DTC(),C1,1,"C!",1,0,-1,1) ' "C!" asks the interface to measure the cable and pass the logger the results.
+                final_code = error_code
+                error_code = error_code + 1
+            else:
+                final_code = error_code
+                error_code = 10
+            EndIf  
+        Loop          
+        SW12 (SW12_1,0,0)
+    EndIf
+
+    
+    '''''''''''''''''''''''''''''
+    '' Output to Storage  '''''''
+    '''''''''''''''''''''''''''''
+	
+    CallTable DTC  
+    CallTable dtc_test
+    CallTable dtc_avg
+    NextScan
+	
+EndProg
